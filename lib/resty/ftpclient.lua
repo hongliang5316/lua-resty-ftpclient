@@ -1,4 +1,4 @@
--- Copyright (C) Ahsialh.
+-- Copyright (C) hongliang5316.
 
 local sub = string.sub
 local tcp = ngx.socket.tcp
@@ -12,15 +12,14 @@ local tonumber = tonumber
 local error = error
 local find = string.find
 
-TIMEOUT = 1000
+local TIMEOUT = 1000
 
 local _M = {
     _VERSION = '0.1'
 }
 
 local commands = {
-    "dele",                      --[["type",--]]
-    --[["quit",--]]            "mkd",
+    "dele", "mkd", "rmd", "cwd", "size", "retr"
 }
 
 
@@ -75,6 +74,7 @@ function _M.close(self)
     return sock:close()
 end
 
+
 local function StringSplit(string,split)
     local list = {}
     local pos = 1
@@ -93,6 +93,7 @@ local function StringSplit(string,split)
     end
     return list
 end
+
 
 local function _con_data_sock(line,data_sock)
 
@@ -152,10 +153,6 @@ function _M.connect(self, opts)
     if not ok then
         return nil, "failed to connect: " .. err
     end
-    local res,err = _read_reply(sock)
-    if not res then
-        return nil,err
-    end
 
     ---receive until nil
     while true do
@@ -193,8 +190,6 @@ function _M.connect(self, opts)
 end
 
 
-
-
 local function _do_cmd(self, ...)
 
     local args = {...}
@@ -229,15 +224,13 @@ for i = 1, #commands do
 end
 
 
-
-
 function _M.get(self,filename)
     local sock = self.sock
     if not sock then
         return nil, "not initialized"
     end
 
-    local bytes,err = sock:send("pasv\r\n")     ---进入被动模式
+    local bytes,err = sock:send("pasv\r\n")
     if not bytes then
         return nil,err
     end
@@ -256,30 +249,13 @@ function _M.get(self,filename)
         return nil,err
     end
 
-    local cmd = {}
-    cmd[1] = "SIZE "
-    cmd[2] = filename
-    cmd[3] = "\r\n"
-    local bytes,err = sock:send(concat(cmd))
-    if not bytes then
-        return nil,err
-    end
-    local line,err = _read_reply(sock)
+    local line, err = _M.size(self, filename)
     if not line then
-        return nil,err
+        return nil, err
     end
+    local size = sub(line, 5, -1)     ---获取文件大小
 
-    local size = sub(line,4,-1)     ---获取文件大小
-
-    local cmd = {}
-    cmd[1] = "retr "
-    cmd[2] = filename
-    cmd[3] = "\r\n"
-    local bytes, err = sock:send(concat(cmd))     ---发送下载命令
-    if not bytes then
-        return nil,"RETR send err:"..err
-    end
-    local line,err = _read_reply(sock)
+    local line = _M.retr(self, filename)    --发送下载命令
     if not line then
         return nil,err
     end
@@ -344,25 +320,6 @@ function _M.put(self,filename,hex)
     end
 
     data_sock:close()       ---关闭数据端口
-
-    return _read_reply(sock)
-end
-
-
-function _M.cwd(self,dirname)
-    local sock = self.sock
-    if not sock then
-        return nil, "not initialized"
-    end
-
-    local cmd = {}
-    cmd[1] = "cwd "
-    cmd[2] = dirname
-    cmd[3] = "\r\n"
-    local bytes, err = sock:send(concat(cmd))     ---发送改变目录
-    if not bytes then
-        return nil,err
-    end
 
     return _read_reply(sock)
 end
