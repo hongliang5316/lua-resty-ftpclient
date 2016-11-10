@@ -103,16 +103,9 @@ local function _con_data_sock(line,data_sock)
     end
 
     local rt = StringSplit(req_data,",")
-    local data_port = rt[5]*256+rt[6]   ---获取数据端口
+    local data_port = tonumber(rt[5]*256) + tonumber(rt[6])
 
-    local ip = {}
-    ip[1] = rt[1]
-    ip[2] = "."
-    ip[3] = rt[2]
-    ip[4] = "."
-    ip[5] = rt[3]
-    ip[6] = "."
-    ip[7] = rt[4]
+    local ip = { rt[1], ".", rt[2], ".", rt[3], ".", rt[4] }
 
     local ok,err =  data_sock:connect(concat(ip),data_port)
     if not ok then
@@ -130,8 +123,8 @@ local function _read_reply(sock)
     end
 
     local _1 = sub(line,1,1)
-    if tonumber(_1) == 4 or tonumber(_1) == 5 then    ---异常状态
-        return nil,line                             ---将异常状态与描述信息变成err
+    if tonumber(_1) == 4 or tonumber(_1) == 5 then
+        return nil, line
     end
 
     return line
@@ -169,11 +162,11 @@ function _M.connect(self, opts)
 
     local bytes,err = sock:send(concat(cmd))
     if not bytes then
-        return nil,err
+        return nil, err
     end
     local line,err = _read_reply(sock)
     if not line then
-        return nil,err
+        return nil, err
     end
 
     local cmd = {}
@@ -239,7 +232,7 @@ function _M.get(self,filename)
         return nil,err
     end
 
-    local data_sock,err =  ngx.socket.tcp()         ---新建一个数据sock连接
+    local data_sock,err = ngx.socket.tcp()
     if not data_sock then
         return nil,"data_sock nil,err:"..err
     end
@@ -253,9 +246,9 @@ function _M.get(self,filename)
     if not line then
         return nil, err
     end
-    local size = sub(line, 5, -1)     ---获取文件大小
+    local size = sub(line, 5, -1)
 
-    local line = _M.retr(self, filename)    --发送下载命令
+    local line = _M.retr(self, filename)
     if not line then
         return nil,err
     end
@@ -265,7 +258,7 @@ function _M.get(self,filename)
         return nil,err
     end
 
-    data_sock:close()                                   ---关闭数据端口
+    data_sock:close()
 
     local line,err = _read_reply(sock)
     if not line then
@@ -282,7 +275,7 @@ function _M.put(self,filename,hex)
         return nil, "not initialized"
     end
 
-    local bytes,err = sock:send("pasv\r\n")     ---进入被动模式
+    local bytes,err = sock:send("pasv\r\n")
     if not bytes then
         return nil,err
     end
@@ -291,7 +284,7 @@ function _M.put(self,filename,hex)
         return nil,err
     end
 
-    local data_sock,err =  ngx.socket.tcp()         ---新建一个数据sock
+    local data_sock,err = ngx.socket.tcp()
     if not data_sock then
         return nil,err
     end
@@ -305,7 +298,7 @@ function _M.put(self,filename,hex)
     cmd[1] = "STOR "
     cmd[2] = filename
     cmd[3] = "\r\n"
-    local bytes, err = sock:send(concat(cmd))     ---发送上传命令
+    local bytes, err = sock:send(concat(cmd))
     if not bytes then
         return nil,err
     end
@@ -314,12 +307,12 @@ function _M.put(self,filename,hex)
         return nil,err
     end
 
-    local bytes, err = data_sock:send(hex)     ---发送流
+    local bytes, err = data_sock:send(hex)
     if not bytes then
         return nil,err
     end
 
-    data_sock:close()       ---关闭数据端口
+    data_sock:close()
 
     return _read_reply(sock)
 end

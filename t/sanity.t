@@ -16,6 +16,8 @@ our $HttpConfig = qq{
 
 $ENV{TEST_NGINX_FTP_PORT} ||= 21;
 $ENV{TEST_NGINX_FTP_DIR} ||= cwd();
+$ENV{TEST_NGINX_FTP_USER} ||= "ftpuser";
+$ENV{TEST_NGINX_FTP_PASSWORD} ||= "123456";
 
 no_long_string();
 #no_diff();
@@ -36,8 +38,8 @@ __DATA__
             local res,err = ftp:connect({
                 host = "127.0.0.1",
                 port = $TEST_NGINX_FTP_PORT,
-                user = "ftpuser",
-                password = "123456"
+                user = "$TEST_NGINX_FTP_USER",
+                password = "$TEST_NGINX_FTP_PASSWORD"
             })
             if not res then
                 ngx.say("failed to connect: ", err)
@@ -65,7 +67,7 @@ __DATA__
 --- request
 GET /t
 --- response_body
-257 "/data" created
+257 "/home/ftpuser/data" created
 250 Remove directory operation successful.
 --- no_error_log
 [error]
@@ -84,8 +86,8 @@ GET /t
             local res,err = ftp:connect({
                 host = "127.0.0.1",
                 port = $TEST_NGINX_FTP_PORT,
-                user = "ftpuser",
-                password = "123456"
+                user = "$TEST_NGINX_FTP_USER",
+                password = "$TEST_NGINX_FTP_PASSWORD"
             })
             if not res then
                 ngx.say("failed to connect: ", err)
