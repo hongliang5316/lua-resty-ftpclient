@@ -34,7 +34,7 @@ __DATA__
             local ftpclient = require "resty.ftpclient"
 
             local ftp = ftpclient:new()
-            ftp:set_timeout(1000)
+            ftp:set_timeout(3000)
             local res,err = ftp:connect({
                 host = "127.0.0.1",
                 port = $TEST_NGINX_FTP_PORT,
@@ -82,7 +82,7 @@ GET /t
             local cjson = require "cjson"
 
             local ftp = ftpclient:new()
-            ftp:set_timeout(1000)
+            ftp:set_timeout(3000)
             local res,err = ftp:connect({
                 host = "127.0.0.1",
                 port = $TEST_NGINX_FTP_PORT,

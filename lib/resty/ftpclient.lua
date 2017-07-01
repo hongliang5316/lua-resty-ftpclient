@@ -31,6 +31,7 @@ function _M.new(self)
     if not sock then
         return nil, err
     end
+
     return setmetatable({ sock = sock }, mt)
 end
 
@@ -75,41 +76,20 @@ function _M.close(self)
 end
 
 
-local function StringSplit(string,split)
-    local list = {}
-    local pos = 1
-    if string.find("", split, 1) then -- this would result in endless loops
-      return nil,"split matches empty string!"
-    end
-    while 1 do
-      local first, last = string.find(string, split, pos)
-      if first then -- found?
-        table.insert(list, string.sub(string, pos, first-1))
-        pos = last+1
-      else
-        table.insert(list, string.sub(string, pos))
-        break
-      end
-    end
-    return list
-end
-
-
-local function _con_data_sock(line,data_sock)
-
-    local _,_,req_data = find(line,"%((.+)%)")
-    if not req_data then
-        return nil,"line err"
+local function _con_data_sock(line, data_sock)
+    local m, err = ngx.re.match(line, [[(\d+),(\d+),(\d+),(\d+),(\d+),(\d+)]],
+                                "jo")
+    if not m then
+        return nil, "pasv: can't parse ip and port from peer"
     end
 
-    local rt = StringSplit(req_data,",")
-    local data_port = tonumber(rt[5]*256) + tonumber(rt[6])
+    local data_port = tonumber(m[5] * 256) + tonumber(m[6])
 
-    local ip = { rt[1], ".", rt[2], ".", rt[3], ".", rt[4] }
+    local ip = { m[1], ".", m[2], ".", m[3], ".", m[4] }
 
-    local ok,err =  data_sock:connect(concat(ip),data_port)
+    local ok, err = data_sock:connect(concat(ip), data_port)
     if not ok then
-      return nil,err
+        return nil,err
     end
 
     return "data_sock connect ok"
@@ -122,12 +102,50 @@ local function _read_reply(sock)
         return nil, err
     end
 
-    local _1 = sub(line,1,1)
+    local _1 = sub(line, 1, 1)
     if tonumber(_1) == 4 or tonumber(_1) == 5 then
         return nil, line
     end
 
     return line
+end
+
+
+local function greet(sock)
+    local line, err = sock:receive()
+    if not line then
+        return nil, err
+    end
+
+    local m = ngx.re.match(line, [[^(\d\d\d)(.?)]], "jo")
+    if not m then
+        return nil, "non-ftp protocol"
+    end
+
+    local code, sep = m[1], m[2]
+    local current = code
+    local greet = line
+
+    if sep == "-" then --reply is multiline
+        repeat
+            line, err = sock:receive()
+            if not line then
+                return nil, err
+            end
+
+            local m = ngx.re.match(line, "^(%d%d%d)(.?)", "jo")
+            if not m then
+                return nil, "non-ftp protocol"
+            end
+
+            code, sep = m[1], m[2]
+            greet = concat({ greet, "\n", line })
+        until code == current and sep == " "
+    end
+
+    if sep == " " then
+        return code, greet
+    end
 end
 
 
@@ -137,66 +155,37 @@ function _M.connect(self, opts)
         return nil, "not initialized"
     end
 
-    local host = opts.host
+    local host = opts.host or "127.0.0.1"
     local port = opts.port or 21
     local user = opts.user
     local pass = opts.password
 
-    local ok,err = sock:connect(host,port)
+    local ok, err = sock:connect(host, port)
     if not ok then
         return nil, "failed to connect: " .. err
     end
 
-    ---receive until nil
-    while true do
-        local line,err = sock:receive()
-        if not line then
-            break
-        end
+    local code, greet = greet(sock)
+    if not code then
+        return nil, greet
     end
 
-    local cmd = {}
-    cmd[1] = "user "
-    cmd[2] = user
-    cmd[3] = "\r\n"
+    if not ngx.re.find(code, "^(?:1|2)", "jo") then
+        return nil, greet
+    end
 
-    local bytes,err = sock:send(concat(cmd))
+    local cmd = { "user ", user, "\r\n" }
+    local bytes, err = sock:send(concat(cmd))
     if not bytes then
         return nil, err
     end
-    local line,err = _read_reply(sock)
+
+    local line, err = _read_reply(sock)
     if not line then
         return nil, err
     end
 
-    local cmd = {}
-    cmd[1] = "pass "
-    cmd[2] = pass
-    cmd[3] = "\r\n"
-
-    local bytes,err = sock:send(concat(cmd))
-    if not bytes then
-        return nil,err
-    end
-
-    return _read_reply(sock)
-end
-
-
-local function _do_cmd(self, ...)
-
-    local args = {...}
-    local sock = self.sock
-    if not sock then
-        return nil, "not initialized"
-    end
-
-    local cmd = {}
-    cmd[1] = args[1]
-    cmd[2] = " "
-    cmd[3] = args[2]
-    cmd[4] = "\r\n"
-
+    local cmd = { "pass ", pass, "\r\n" }
     local bytes, err = sock:send(concat(cmd))
     if not bytes then
         return nil, err
@@ -206,10 +195,25 @@ local function _do_cmd(self, ...)
 end
 
 
+local function _do_cmd(self, ...)
+    local sock = self.sock
+    if not sock then
+        return nil, "not initialized"
+    end
+
+    local args = { ... }
+    local cmd = { args[1], " ", args[2], "\r\n" }
+    local bytes, err = sock:send(concat(cmd))
+    if not bytes then
+        return nil, err
+    end
+
+    return _read_reply(sock)
+end
+
 
 for i = 1, #commands do
     local cmd = commands[i]
-
     _M[cmd] =
         function (self, ...)
             return _do_cmd(self, cmd, ...)
@@ -217,27 +221,28 @@ for i = 1, #commands do
 end
 
 
-function _M.get(self,filename)
+function _M.get(self, filename)
     local sock = self.sock
     if not sock then
         return nil, "not initialized"
     end
 
-    local bytes,err = sock:send("pasv\r\n")
+    local bytes, err = sock:send("pasv\r\n")
     if not bytes then
-        return nil,err
+        return nil, err
     end
-    local line,err = _read_reply(sock)
+    local line, err = _read_reply(sock)
     if not line then
-        return nil,err
+        return nil, err
     end
 
-    local data_sock,err = ngx.socket.tcp()
+    local data_sock, err = ngx.socket.tcp()
     if not data_sock then
-        return nil,"data_sock nil,err:"..err
+        return nil, "data_sock nil, err:" .. err
     end
+
     data_sock:settimeout(TIMEOUT)
-    local res,err = _con_data_sock(line,data_sock)
+    local res, err = _con_data_sock(line, data_sock)
     if not res then
         return nil,err
     end
@@ -246,23 +251,24 @@ function _M.get(self,filename)
     if not line then
         return nil, err
     end
+
     local size = sub(line, 5, -1)
 
     local line = _M.retr(self, filename)
     if not line then
-        return nil,err
+        return nil, err
     end
 
-    local data,err = data_sock:receive(size)
+    local data, err = data_sock:receive(size)
     if not data then
-        return nil,err
+        return nil, err
     end
 
     data_sock:close()
 
-    local line,err = _read_reply(sock)
+    local line, err = _read_reply(sock)
     if not line then
-        return nil,err
+        return nil, err
     end
 
     return data
@@ -275,34 +281,33 @@ function _M.put(self,filename,hex)
         return nil, "not initialized"
     end
 
-    local bytes,err = sock:send("pasv\r\n")
+    local bytes, err = sock:send("pasv\r\n")
     if not bytes then
         return nil,err
     end
-     local line,err = _read_reply(sock)
+     local line, err = _read_reply(sock)
     if not line then
-        return nil,err
+        return nil, err
     end
 
-    local data_sock,err = ngx.socket.tcp()
+    local data_sock, err = ngx.socket.tcp()
     if not data_sock then
-        return nil,err
-    end
-    data_sock:settimeout(TIMEOUT)
-    local res,err = _con_data_sock(line,data_sock)
-    if not res then
-        return nil,err
+        return nil, err
     end
 
-    local cmd = {}
-    cmd[1] = "STOR "
-    cmd[2] = filename
-    cmd[3] = "\r\n"
+    data_sock:settimeout(TIMEOUT)
+    local res, err = _con_data_sock(line, data_sock)
+    if not res then
+        return nil, err
+    end
+
+    local cmd = { "stor ", filename, "\r\n" }
     local bytes, err = sock:send(concat(cmd))
     if not bytes then
-        return nil,err
+        return nil, err
     end
-     local line,err = _read_reply(sock)
+
+    local line, err = _read_reply(sock)
     if not line then
         return nil,err
     end
