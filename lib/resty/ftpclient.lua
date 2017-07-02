@@ -12,7 +12,7 @@ local tonumber = tonumber
 local error = error
 local find = string.find
 
-local TIMEOUT = 1000
+local TIMEOUT = 5000
 
 local _M = {
     _VERSION = '0.1'
