@@ -133,7 +133,7 @@ local function greet(sock)
                 return nil, err
             end
 
-            local m = ngx.re.match(line, "^(%d%d%d)(.?)", "jo")
+            local m = ngx.re.match(line, [[^(\d\d\d)(.?)]], "jo")
             if not m then
                 return nil, "non-ftp protocol"
             end
