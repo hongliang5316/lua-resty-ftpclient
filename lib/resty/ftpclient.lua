@@ -275,7 +275,7 @@ function _M.get(self, filename)
 end
 
 
-function _M.put(self,filename,hex)
+function _M.put(self, filename, hex)
     local sock = self.sock
     if not sock then
         return nil, "not initialized"
