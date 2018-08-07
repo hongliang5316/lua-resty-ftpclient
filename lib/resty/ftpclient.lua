@@ -11,6 +11,10 @@ local setmetatable = setmetatable
 local tonumber = tonumber
 local error = error
 local find = string.find
+local co_yield  = coroutine.yield
+local co_create = coroutine.create
+local co_resume = coroutine.resume
+local co_status = coroutine.status
 
 local TIMEOUT = 5000
 
@@ -22,8 +26,25 @@ local commands = {
     "dele", "mkd", "rmd", "cwd", "size", "retr"
 }
 
-
 local mt = { __index = _M }
+
+
+-- Reimplemented coroutine.wrap, returning "nil, err" if the coroutine cannot
+-- be resumed.
+local co_wrap = function(func)
+    local co = co_create(func)
+    if not co then
+        return nil, "could not create coroutine"
+    else
+        return function(...)
+            if co_status(co) == "suspended" then
+                return select(2, co_resume(co, ...))
+            else
+                return nil, "can't resume a " .. co_status(co) .. " coroutine"
+            end
+        end
+    end
+end
 
 
 function _M.new(self)
@@ -221,16 +242,12 @@ for i = 1, #commands do
 end
 
 
-function _M.get(self, filename)
-    local sock = self.sock
-    if not sock then
-        return nil, "not initialized"
-    end
-
+local function get_data_sock(sock)
     local bytes, err = sock:send("pasv\r\n")
     if not bytes then
         return nil, err
     end
+
     local line, err = _read_reply(sock)
     if not line then
         return nil, err
@@ -238,13 +255,29 @@ function _M.get(self, filename)
 
     local data_sock, err = ngx.socket.tcp()
     if not data_sock then
-        return nil, "data_sock nil, err:" .. err
+        return nil, "data_sock nil, err: " .. err
     end
 
     data_sock:settimeout(TIMEOUT)
+
     local res, err = _con_data_sock(line, data_sock)
     if not res then
-        return nil,err
+        return nil, err
+    end
+
+    return data_sock
+end
+
+
+function _M.get(self, filename)
+    local sock = self.sock
+    if not sock then
+        return nil, "not initialized"
+    end
+
+    local data_sock, err = get_data_sock(sock)
+    if not data_sock then
+        return nil, err
     end
 
     local line, err = _M.size(self, filename)
@@ -252,7 +285,7 @@ function _M.get(self, filename)
         return nil, err
     end
 
-    local size = sub(line, 5, -1)
+    local size = tonumber(sub(line, 5, -1))
 
     local line = _M.retr(self, filename)
     if not line then
@@ -281,23 +314,8 @@ function _M.put(self, filename, hex)
         return nil, "not initialized"
     end
 
-    local bytes, err = sock:send("pasv\r\n")
-    if not bytes then
-        return nil,err
-    end
-     local line, err = _read_reply(sock)
-    if not line then
-        return nil, err
-    end
-
-    local data_sock, err = ngx.socket.tcp()
+    local data_sock, err = get_data_sock(sock)
     if not data_sock then
-        return nil, err
-    end
-
-    data_sock:settimeout(TIMEOUT)
-    local res, err = _con_data_sock(line, data_sock)
-    if not res then
         return nil, err
     end
 
@@ -320,6 +338,75 @@ function _M.put(self, filename, hex)
     data_sock:close()
 
     return _read_reply(sock)
+end
+
+
+local function stream_reader(sock, data_sock, size, default_chunk_size)
+    return co_wrap(function(max_chunk_size)
+        max_chunk_size = max_chunk_size or default_chunk_size
+        local received = 0
+        repeat
+            local length = max_chunk_size
+            if received + length > size then
+                length = size - received
+            end
+
+            if length > 0 then
+                local str, err = data_sock:receive(length)
+                if not str then
+                    data_sock:close()
+                    co_yield(nil, err)
+                end
+                received = received + length
+
+                max_chunk_size = tonumber(co_yield(str) or default_chunk_size)
+                if max_chunk_size and max_chunk_size < 0 then
+                    max_chunk_size = nil
+                end
+
+                if not max_chunk_size then
+                    ngx.log(ngx.ERR, "Buffer size not specified, bailing")
+                    break
+                end
+            end
+        until length == 0
+
+        data_sock:close()
+
+        -- read from sock
+        local line, err = _read_reply(sock)
+        if not line then
+            co_yield(nil, err)
+        end
+    end)
+end
+
+
+function _M.get_by_stream(self, filename, chunk_size)
+    local sock = self.sock
+    if not sock then
+        return nil, "not initialized"
+    end
+
+    local data_sock, err = get_data_sock(sock)
+    if not data_sock then
+        return nil, err
+    end
+
+    local line, err = _M.size(self, filename)
+    if not line then
+        return nil, err
+    end
+
+    local size = tonumber(sub(line, 5, -1))
+
+    local line = _M.retr(self, filename)
+    if not line then
+        return nil, err
+    end
+
+    -- return function
+    return stream_reader(sock, data_sock, size, chunk_size)
 end
 
 
