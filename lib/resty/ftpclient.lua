@@ -11,19 +11,42 @@ local setmetatable = setmetatable
 local tonumber = tonumber
 local error = error
 local find = string.find
+local co_yield  = coroutine.yield
+local co_create = coroutine.create
+local co_resume = coroutine.resume
+local co_status = coroutine.status
 
-local TIMEOUT = 5000
+
+local TIMEOUT = 60000
 
 local _M = {
     _VERSION = '0.1'
 }
+
+local mt = { __index = _M }
+
 
 local commands = {
     "dele", "mkd", "rmd", "cwd", "size", "retr"
 }
 
 
-local mt = { __index = _M }
+-- Reimplemented coroutine.wrap, returning "nil, err" if the coroutine cannot
+-- be resumed.
+local co_wrap = function(func)
+    local co = co_create(func)
+    if not co then
+        return nil, "could not create coroutine"
+    else
+        return function(...)
+            if co_status(co) == "suspended" then
+                return select(2, co_resume(co, ...))
+            else
+                return nil, "can't resume a " .. co_status(co) .. " coroutine"
+            end
+        end
+    end
+end
 
 
 function _M.new(self)
@@ -323,4 +346,101 @@ function _M.put(self, filename, hex)
 end
 
 
+local function _by_stream(data_size, data_sock, default_chunk_size)
+    data_size = tonumber(data_size)
+	default_chunk_size = tonumber(default_chunk_size)
+
+    local cycle_num = 0
+	
+	local remain = data_size % default_chunk_size
+    if remain == 0 then
+        cycle_num = data_size / default_chunk_size
+    else
+        cycle_num = data_size / default_chunk_size
+	    cycle_num = tonumber(string.match(tostring(cycle_num), "%d+")) + 1
+    end
+	
+	return co_wrap(function(max_chunk_size)
+        max_chunk_size = max_chunk_size or default_chunk_size
+	
+        local cur_cycle_num = 0
+
+        for i=1, cycle_num do
+			cur_cycle_num = cur_cycle_num + 1
+
+            if cur_cycle_num == cycle_num and remain ~= 0 then
+                max_chunk_size = remain
+            end
+
+		    local str, err, partial = data_sock:receive(max_chunk_size)
+            if not str and err == "closed" then
+                return
+			end
+
+			max_chunk_size = tonumber(co_yield(str) or default_chunk_size)
+			if max_chunk_size and max_chunk_size < 0 then max_chunk_size = nil end
+
+			if not max_chunk_size then
+				ngx_log(ngx_ERR, "Buffer size not specified, bailing")
+				break
+			end
+        end
+		
+		data_sock:close()
+    end)
+end
+
+
+function _M.ftp_read_by_stream(self, filename, chunk_size)
+
+    local sock = self.sock
+	if not sock then
+        return nil, "not initialized"
+    end
+
+    local bytes, err = sock:send("pasv\r\n")
+    if not bytes then
+        return nil, err
+    end
+    local line, err = _read_reply(sock)
+    if not line then
+        return nil, err
+    end
+
+    local data_sock, err = ngx.socket.tcp()
+    if not data_sock then
+        return nil, "data_sock nil, err:" .. err
+    end
+
+    data_sock:settimeout(TIMEOUT)
+    local res, err = _con_data_sock(line, data_sock)
+    if not res then
+        return nil,err
+    end
+	
+	
+    local line, err = _M.size(self, filename)
+    if not line then
+        return nil, err
+    end
+
+    local size = sub(line, 5, -1)
+
+    local line = _M.retr(self, filename)
+    if not line then
+        return nil, err
+    end
+
+    local read_by_stream, err = _by_stream(size, data_sock, chunk_size)
+    if err then
+        return nil, err
+    end
+	
+    return {
+		read_by_stream = read_by_stream
+    }
+end
+
+
 return _M
+
