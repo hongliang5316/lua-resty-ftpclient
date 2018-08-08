@@ -110,10 +110,10 @@ local function _con_data_sock(line, data_sock)
 
     local ok, err = data_sock:connect(concat(ip), data_port)
     if not ok then
-        return nil,err
+        return nil, err
     end
 
-    return "data_sock connect ok"
+    return "data_sock connected successful"
 end
 
 
@@ -404,6 +404,8 @@ function _M.get_by_stream(self, filename, chunk_size)
     if not line then
         return nil, err
     end
+
+    chunk_size = chunk_size or 4096
 
     -- return function
     return stream_reader(sock, data_sock, size, chunk_size)
