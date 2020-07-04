@@ -288,7 +288,6 @@ ba1f2511fc30423bdbb183fe33f3dd0f
 
 
 === TEST 4: get_by_stream change chunk_size
---- ONLY
 --- http_config eval: $::HttpConfig
 --- config
     location /t {
